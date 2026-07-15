@@ -1,0 +1,126 @@
+/* Injected action button style */
+.monkeys-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #7c3aed 0%, #ea580c 100%);
+  color: #ffffff !important;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  border: none;
+  border-radius: 9999px;
+  padding: 6px 14px;
+  margin-left: 12px;
+  cursor: pointer;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 0 12px rgba(124, 58, 237, 0.3);
+  vertical-align: middle;
+  outline: none;
+}
+
+.monkeys-action-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 0 18px rgba(234, 88, 12, 0.5);
+  filter: brightness(1.1);
+}
+
+.monkeys-action-btn:active {
+  transform: translateY(1px);
+}
+
+.monkeys-action-btn:disabled {
+  background: #374151;
+  color: #9ca3af !important;
+  box-shadow: none;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.monkeys-action-btn.success {
+  background: #10b981;
+  box-shadow: 0 0 12px rgba(16, 185, 129, 0.4);
+}
+
+.monkeys-action-btn.error {
+  background: #ef4444;
+  box-shadow: 0 0 12px rgba(239, 68, 68, 0.4);
+}
+
+.monkeys-action-btn svg {
+  margin-right: 6px;
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
+}
+
+/* Toast container & notification styles */
+.monkeys-toast-container {
+  position: fixed;
+  top: 24px;
+  right: 24px;
+  z-index: 999999;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  pointer-events: none;
+}
+
+.monkeys-toast {
+  pointer-events: auto;
+  min-width: 300px;
+  max-width: 400px;
+  background: rgba(15, 23, 42, 0.85);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  padding: 16px;
+  color: #f8fafc;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.5);
+  transform: translateX(120%);
+  transition: transform 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275), opacity 0.4s ease;
+  opacity: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.monkeys-toast.show {
+  transform: translateX(0);
+  opacity: 1;
+}
+
+.monkeys-toast-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.monkeys-toast-header svg {
+  width: 16px;
+  height: 16px;
+}
+
+.monkeys-toast-body {
+  font-size: 13px;
+  color: #cbd5e1;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+/* Color variations for toast border glows */
+.monkeys-toast.info {
+  border-left: 4px solid #7c3aed;
+}
+
+.monkeys-toast.success {
+  border-left: 4px solid #10b981;
+}
+
+.monkeys-toast.error {
+  border-left: 4px solid #ef4444;
+}
