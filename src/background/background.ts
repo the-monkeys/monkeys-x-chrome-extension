@@ -1,35 +1,48 @@
-import { getSettings, DEFAULT_SETTINGS } from '../lib/storage';
+import { getSettings } from '../lib/storage';
 import { createJob } from '../lib/api';
+import { configureStudioScripts } from '../lib/studio';
+import { AutomationController } from './automation';
 
-// Initialize settings on installation
-chrome.runtime.onInstalled.addListener(async () => {
-  console.log('Monkeys X Automation Extension Installed.');
-  const existingSettings = await getSettings();
-  // Ensure default values are populated if empty
-  if (!existingSettings.orchestratorUrl) {
-    await chrome.storage.sync.set(DEFAULT_SETTINGS);
-  }
+const controller = new AutomationController();
+const ALARM = 'monkeys-automation-health';
+const report = (error: unknown) => console.error('[Monkeys] Automation error:', error);
+
+async function initialize(browserRestart = false) {
+  await chrome.alarms.create(ALARM, { periodInMinutes: 1 });
+  await controller.pulse(browserRestart);
+}
+
+chrome.runtime.onInstalled.addListener(() => { void initialize().catch(report); });
+chrome.runtime.onStartup.addListener(() => { void initialize(true).catch(report); });
+chrome.alarms.onAlarm.addListener(alarm => {
+  if (alarm.name === ALARM) void controller.pulse().catch(report);
+});
+chrome.tabs.onRemoved.addListener(tabId => { void controller.tabRemoved(tabId).catch(report); });
+chrome.tabs.onUpdated.addListener((tabId, changes) => {
+  if (changes.status === 'complete') void controller.tabReady(tabId).catch(report);
 });
 
-// Handle incoming runtime messages from content script or popup
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (message.type === 'CREATE_AUTOMATION_JOB') {
-    const { tweetId, replyToTweetId } = message.payload;
-    
-    // Asynchronous message reply execution
-    (async () => {
-      try {
-        const settings = await getSettings();
-        const job = await createJob(settings, tweetId, replyToTweetId);
-        sendResponse({ success: true, job });
-      } catch (error: any) {
-        console.error('Error in background job creation:', error);
-        sendResponse({ success: false, error: error.message || 'Failed to create job.' });
-      }
-    })();
-
-    return true; // Keep message channel open for asynchronous sendResponse
-  }
-  
-  return false;
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  const respond = async () => {
+    if (message.type === 'CONFIGURE_STUDIO') {
+      await configureStudioScripts((await getSettings()).studioUrl);
+      await controller.pulse();
+      return { success: true };
+    }
+    if (message.type === 'CREATE_AUTOMATION_JOB') {
+      const job = await createJob(await getSettings(), message.payload.tweetId, message.payload.replyToTweetId);
+      return { success: true, job };
+    }
+    return controller.handle(message, sender);
+  };
+  void respond().then(sendResponse, error => {
+    report(error);
+    sendResponse({ success: false, accepted: false, error: error instanceof Error ? error.message : 'Automation failed.' });
+  });
+  return true;
 });
+
+// Recreate alarms after an update/reload without a permanently running worker.
+void chrome.alarms.get(ALARM).then(alarm => {
+  if (!alarm) return chrome.alarms.create(ALARM, { periodInMinutes: 1 });
+}).catch(report);

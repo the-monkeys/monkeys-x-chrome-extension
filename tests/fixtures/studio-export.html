@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Studio image transfer regression</title>
+<h1>Studio image transfer regression</h1>
+<button id="run">Test large image export</button>
+<pre id="status">Ready</pre>
+<img id="preview" alt="Compressed screenshot preview" width="320">
+<script src="/public/injected-interceptor.js"></script>
+<script>
+  const status = document.getElementById('status');
+  let inputBytes = 0;
+  window.addEventListener('message', async event => {
+    if (event.source !== window || event.data?.token !== 'regression-attempt') return;
+    if (event.data.type === 'MONKEYS_EXPORT_FAILED') { status.textContent = 'FAIL: ' + event.data.error; return; }
+    if (event.data.type !== 'MONKEYS_INTERCEPTED_BLOB') return;
+    const preview = document.getElementById('preview');
+    preview.src = event.data.dataUrl;
+    await preview.decode();
+    const pass = inputBytes > 4_400_000 && event.data.dataUrl.startsWith('data:image/jpeg;base64,') &&
+      event.data.dataUrl.length < 6_000_000 && preview.naturalWidth === 1280 && preview.naturalHeight === 1600;
+    status.textContent = JSON.stringify({ result: pass ? 'PASS' : 'FAIL', inputBytes,
+      outputCharacters: event.data.dataUrl.length, format: event.data.dataUrl.split(',')[0],
+      width: preview.naturalWidth, height: preview.naturalHeight }, null, 2);
+    document.documentElement.removeAttribute('data-monkeys-export-until');
+    document.documentElement.removeAttribute('data-monkeys-export-token');
+  });
+  document.getElementById('run').onclick = async () => {
+    status.textContent = 'Generating a 2160 × 2700 PNG using the browser canvas…';
+    const canvas = document.createElement('canvas');
+    canvas.width = 2160; canvas.height = 2700;
+    const context = canvas.getContext('2d');
+    const image = context.createImageData(canvas.width, canvas.height);
+    let seed = 12345;
+    for (let i = 0; i < image.data.length; i += 4) {
+      for (let channel = 0; channel < 3; channel++) {
+        seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5;
+        image.data[i + channel] = seed & 255;
+      }
+      image.data[i + 3] = 255;
+    }
+    context.putImageData(image, 0, 0);
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+    inputBytes = blob.size;
+    document.documentElement.setAttribute('data-monkeys-export-until', String(Date.now() + 60000));
+    document.documentElement.setAttribute('data-monkeys-export-token', 'regression-attempt');
+    const url = URL.createObjectURL(blob);
+    URL.revokeObjectURL(url);
+  };
+</script>
+</html>

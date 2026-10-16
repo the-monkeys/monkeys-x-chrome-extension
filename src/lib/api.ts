@@ -70,7 +70,7 @@ export async function createJob(
     sourceTweetId: tweetId,
     replyToTweetId: replyToTweetId || tweetId,
     options: {
-      theme: settings.selectedTheme,
+      theme: 'midnight',
       aspect: settings.selectedAspect,
     },
   });

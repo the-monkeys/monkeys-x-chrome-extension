@@ -1,39 +1,43 @@
-import React, { useState, useEffect } from 'react';
-import { 
-  Settings as SettingsIcon, 
-  Layers, 
-  RefreshCw, 
-  CheckCircle2, 
-  AlertCircle, 
+﻿import React, { useState, useEffect } from 'react';
+import {
+  Settings as SettingsIcon,
+  Layers,
+  RefreshCw,
+  CheckCircle2,
+  AlertCircle,
   ExternalLink,
   Save,
-  XCircle,
-  HelpCircle
+  MessageSquare
 } from 'lucide-react';
-import { getSettings, saveSettings, ExtensionSettings } from '../lib/storage';
-import { fetchJobs, approveJob, checkHealth, AutomationJob, HealthStatus } from '../lib/api';
+import { getSettings, saveSettings, normalizeSettings, ExtensionSettings } from '../lib/storage';
+import { studioMatchPattern } from '../lib/studio';
+import type { AutomationStatus } from '../background/automation';
+const BUILD_ID = typeof __MONKEYS_BUILD_ID__ === 'string' ? __MONKEYS_BUILD_ID__ : 'development';
+
+interface MentionEvent {
+  tweetId: string;
+  detectedAt: string;
+}
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<'dashboard' | 'settings'>('dashboard');
   const [settings, setSettings] = useState<ExtensionSettings | null>(null);
-  const [jobs, setJobs] = useState<AutomationJob[]>([]);
-  const [health, setHealth] = useState<HealthStatus | null>(null);
-  
-  // UI states
+  const [mentions, setMentions] = useState<MentionEvent[]>([]);
   const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [automation, setAutomation] = useState<AutomationStatus | null>(null);
+  const [controlling, setControlling] = useState(false);
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
 
-  // Load configuration on mount
   useEffect(() => {
     async function init() {
       try {
-        const loadedSettings = await getSettings();
-        setSettings(loadedSettings);
-        await performHealthCheck(loadedSettings);
+        const s = await getSettings();
+        setSettings(s);
+        const stored = await chrome.storage.local.get('monkeys_recent_mentions');
+        setMentions(stored.monkeys_recent_mentions ?? []);
       } catch (err) {
-        console.error('Initialization failed:', err);
+        console.error(err);
       } finally {
         setLoading(false);
       }
@@ -41,321 +45,291 @@ export default function App() {
     init();
   }, []);
 
-  // Poll for jobs when dashboard is active and backend is connected
   useEffect(() => {
-    let interval: any;
-    if (activeTab === 'dashboard' && settings && health?.xConnected) {
-      loadJobs(settings);
-      interval = setInterval(() => {
-        loadJobs(settings, true);
-      }, 8000); // Poll every 8s
-    }
-    return () => clearInterval(interval);
-  }, [activeTab, settings, health]);
+    const refresh = async () => {
+      try {
+        const status = await chrome.runtime.sendMessage({ type: 'GET_AUTOMATION_STATUS' });
+        if (typeof status?.enabled === 'boolean') setAutomation(status);
+      } catch { /* popup may be open during an extension reload */ }
+    };
+    void refresh();
+    const timer = setInterval(() => { void refresh(); }, 5000);
+    return () => clearInterval(timer);
+  }, []);
 
-  const performHealthCheck = async (cfg: ExtensionSettings) => {
-    if (!cfg.orchestratorUrl) {
-      setHealth(null);
-      return;
-    }
+  const control = async (action: string) => {
+    setControlling(true);
     try {
-      const status = await checkHealth(cfg);
-      setHealth(status);
-      if (status.xConnected) {
-        loadJobs(cfg);
-      }
-    } catch (err) {
-      console.warn('Orchestrator health check failed:', err);
-      setHealth({ status: 'offline', xConnected: false, workerActive: false });
-    }
-  };
-
-  const loadJobs = async (cfg: ExtensionSettings, silent = false) => {
-    if (!silent) setRefreshing(true);
-    try {
-      const activeJobs = await fetchJobs(cfg);
-      // Sort jobs to display newest first
-      setJobs(activeJobs.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()));
-    } catch (err) {
-      console.error('Failed to load jobs:', err);
-    } finally {
-      if (!silent) setRefreshing(false);
-    }
-  };
-
-  const handleRefresh = async () => {
-    if (!settings) return;
-    setRefreshing(true);
-    await performHealthCheck(settings);
-    setRefreshing(false);
-  };
-
-  const handleApprove = async (jobId: string) => {
-    if (!settings) return;
-    try {
-      await approveJob(settings, jobId);
-      showStatusMessage('Job approved successfully!', 'success');
-      loadJobs(settings);
-    } catch (err: any) {
-      showStatusMessage(err.message || 'Approval failed.', 'error');
-    }
+      const result = await chrome.runtime.sendMessage({ type: 'AUTOMATION_CONTROL', action, jobId: automation?.activeJob?.id });
+      if (!result?.accepted) throw new Error(result?.error || 'This action is no longer available. Refresh the popup.');
+      setAutomation(result.status);
+    } catch (error) {
+      setMessage({ text: error instanceof Error ? error.message : 'Could not update automation.', type: 'error' });
+    } finally { setControlling(false); }
   };
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!settings) return;
     setSaving(true);
-    setMessage(null);
-
     try {
-      await saveSettings(settings);
-      await performHealthCheck(settings);
-      showStatusMessage('Settings saved successfully!', 'success');
-    } catch (err: any) {
-      showStatusMessage(err.message || 'Failed to save settings.', 'error');
+      const updated = normalizeSettings(settings);
+      const granted = await chrome.permissions.request({ origins: [studioMatchPattern(updated.studioUrl)] });
+      if (!granted) throw new Error('Allow access to the Studio site to save this URL.');
+      await saveSettings(updated);
+      setSettings(updated);
+      const response = await chrome.runtime.sendMessage({ type: 'CONFIGURE_STUDIO' });
+      if (!response?.success) throw new Error(response?.error || 'Unable to configure the Studio site.');
+      setMessage({ text: 'Settings saved', type: 'success' });
+      setTimeout(() => setMessage(null), 3000);
+    } catch (error) {
+      setMessage({ text: error instanceof Error ? error.message : 'Failed to save', type: 'error' });
     } finally {
       setSaving(false);
     }
   };
 
-  const showStatusMessage = (text: string, type: 'success' | 'error') => {
-    setMessage({ text, type });
-    setTimeout(() => setMessage(null), 3000);
-  };
-
-  const updateSettingField = <K extends keyof ExtensionSettings>(field: K, value: ExtensionSettings[K]) => {
-    if (!settings) return;
-    setSettings({
-      ...settings,
-      [field]: value
-    });
+  const downloadDiagnostics = async () => {
+    try {
+      const report = await chrome.runtime.sendMessage({ type: 'GET_DIAGNOSTICS' });
+      if (!report?.events || !report?.buildId) throw new Error('Diagnostics unavailable. Reload the extension first.');
+      const url = URL.createObjectURL(new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' }));
+      const link = document.createElement('a');
+      link.href = url; link.download = 'monkeys-diagnostics.json'; link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setMessage({ type: 'success', text: 'Diagnostics downloaded. You can attach that JSON file to this chat.' });
+    } catch (error) {
+      setMessage({ type: 'error', text: error instanceof Error ? error.message : 'Could not download diagnostics.' });
+    }
   };
 
   if (loading) {
     return (
       <div className="popup-container" style={{ justifyContent: 'center', alignItems: 'center' }}>
-        <RefreshCw className="spinning" style={{ color: '#8b5cf6', width: '24px', height: '24px' }} />
+        <RefreshCw className="spinning" style={{ color: '#8b5cf6', width: 24, height: 24 }} />
       </div>
     );
   }
 
-  const isConnected = health && health.status !== 'offline';
-
   return (
     <div className="popup-container">
-      {/* Header */}
       <header className="header">
         <div className="logo-container">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <path d="M12 2C6.48 2 2 6.48 2 12C2 17.52 6.48 22 12 22C17.52 22 22 17.52 22 12C22 6.48 17.52 2 12 2ZM12 6C13.66 6 15 7.34 15 9C15 10.66 13.66 12 12 12C10.34 12 9 10.66 9 9C9 7.34 10.34 6 12 6ZM12 18C9.33 18 4.67 19.33 4.67 22C5.97 23.23 7.73 24 9.67 24H14.33C16.27 24 18.03 23.23 19.33 22C19.33 19.33 14.67 18 12 18Z" fill="url(#logoGrad)"/>
-            <defs>
-              <linearGradient id="logoGrad" x1="0" y1="0" x2="24" y2="24" gradientUnits="userSpaceOnUse">
-                <stop stopColor="#8b5cf6" />
-                <stop offset="1" stopColor="#f97316" />
-              </linearGradient>
-            </defs>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z" fill="url(#g)"/>
+            <defs><linearGradient id="g" x1="0" y1="0" x2="24" y2="24"><stop stopColor="#8b5cf6"/><stop offset="1" stopColor="#f97316"/></linearGradient></defs>
           </svg>
           <span className="logo-text">MONKEYS X</span>
         </div>
-
-        <div className={`status-badge ${isConnected ? 'connected' : 'disconnected'}`}>
-          <span className="status-dot"></span>
-          <span>{isConnected ? 'Connected' : 'Offline'}</span>
-        </div>
       </header>
 
-      {/* Navigation Tabs */}
       <nav className="tabs-navigation">
-        <button 
+        <button
           className={`tab-btn ${activeTab === 'dashboard' ? 'active' : ''}`}
           onClick={() => setActiveTab('dashboard')}
         >
-          <Layers size={14} />
-          <span>Queue</span>
+          <Layers size={14} /><span>Mentions</span>
         </button>
-        <button 
+        <button
           className={`tab-btn ${activeTab === 'settings' ? 'active' : ''}`}
           onClick={() => setActiveTab('settings')}
         >
-          <SettingsIcon size={14} />
-          <span>Settings</span>
+          <SettingsIcon size={14} /><span>Settings</span>
         </button>
       </nav>
 
-      {/* Main Tab Contents */}
       <main className="tab-content">
         {activeTab === 'dashboard' ? (
           <>
+            {automation && (
+              <section className="automation-panel" aria-label="Automation status">
+                <div className="dashboard-actions">
+                  <span className="section-title">{automation.enabled ? 'Monitoring' : 'Paused'}</span>
+                  <button className="action-btn-sm" disabled={controlling} onClick={() => { void control(automation.enabled ? 'pause' : 'start'); }}>
+                    {automation.enabled ? 'Pause' : 'Start monitoring'}
+                  </button>
+                </div>
+                <span>{automation.pendingCount} / {automation.queueLimit} requests · {automation.managedTabs} / 3 managed tabs</span>
+                <span className="toggle-desc">Health check: {automation.lastCheckAt ? new Date(automation.lastCheckAt).toLocaleTimeString() : 'Waiting for first check'}</span>
+                {automation.warning && <p className="automation-warning" role="status">{automation.warning}</p>}
+                {automation.activeJob && <>
+                  <span>Request …{automation.activeJob.tweetId.slice(-6)}: {automation.activeJob.stage.replace(/_/g, ' ')} (attempt {automation.activeJob.attempts}/3)</span>
+                  <a className="tweet-link" href={automation.activeJob.tweetUrl} target="_blank" rel="noreferrer">
+                    Screenshot target: {automation.activeJob.targetKind === 'parent' ? 'parent post' : automation.activeJob.targetKind === 'current' ? 'command post' : 'selected post'} <ExternalLink size={10} />
+                  </a>
+                  {automation.activeJob.stage === 'retry_wait' && automation.activeJob.retryAt && <span className="toggle-desc">
+                    Next retry: {new Date(automation.activeJob.retryAt).toLocaleTimeString()}{!automation.enabled ? ' — paused' : ''}
+                  </span>}
+                  {automation.activeJob.error && <p className="automation-warning">{automation.activeJob.error}</p>}
+                  {automation.activeJob.stage === 'awaiting_approval' && (
+                    <button className="action-btn-sm" disabled={controlling || !automation.enabled} onClick={() => { void control('approve'); }}>Approve screenshot reply</button>
+                  )}
+                  {automation.activeJob.stage === 'needs_review' && <>
+                    <a className="tweet-link" href={`https://x.com/i/status/${automation.activeJob.reviewTweetId ?? automation.activeJob.tweetId}`} target="_blank" rel="noreferrer">Check reply on X <ExternalLink size={10} /></a>
+                    <button className="action-btn-sm" disabled={controlling} onClick={() => { void control('resolve_posted'); }}>I checked X — mark posted</button>
+                  </>}
+                  {automation.activeJob.stage !== 'posting' && (
+                    <button className="refresh-btn skip-request" disabled={controlling} onClick={() => { void control('skip'); }}>Skip this request</button>
+                  )}
+                </>}
+              </section>
+            )}
+            <details className="diagnostics-panel">
+              <summary>Diagnostics · v1.0.2</summary>
+              <span>Popup build: {BUILD_ID}</span>
+              <span>Worker build: {automation?.buildId ?? 'not connected'}</span>
+              {['watcher', 'studio', 'reply'].map(component => {
+                const script = automation?.scriptVersions?.slice().reverse().find(item => item.component === component);
+                return <span key={component} className={script && script.buildId !== BUILD_ID ? 'automation-warning' : ''}>
+                  {component}: {script ? `${script.buildId} (tab ${script.tabId})${script.buildId !== BUILD_ID ? ' — refresh required' : ''}` : 'not seen yet'}
+                </span>;
+              })}
+              <span>Latest step: {automation?.lastTrace ?? 'waiting for activity'}</span>
+              <button className="action-btn-sm" onClick={() => { void downloadDiagnostics(); }}>Download diagnostics</button>
+              <span className="toggle-desc">Last 300 events, saved locally. No image data, cookies or API keys.</span>
+            </details>
+            {message && <div className={`toast ${message.type}`} role="status">{message.text}</div>}
             <div className="dashboard-actions">
-              <span className="section-title">Active Automation Jobs</span>
-              <button 
-                className={`refresh-btn ${refreshing ? 'spinning' : ''}`}
-                onClick={handleRefresh}
-                title="Refresh queue"
-                disabled={refreshing}
+              <span className="section-title">Recent @{settings?.xUsername} Mentions</span>
+              <button
+                className="refresh-btn"
+                onClick={async () => {
+                  const stored = await chrome.storage.local.get('monkeys_recent_mentions');
+                  setMentions(stored.monkeys_recent_mentions ?? []);
+                }}
+                title="Refresh"
               >
                 <RefreshCw size={14} />
               </button>
             </div>
 
-            {!isConnected ? (
+            {mentions.length === 0 ? (
               <div className="empty-state">
-                <XCircle size={32} style={{ color: '#ef4444' }} />
-                <p style={{ fontSize: '13px', fontWeight: 600 }}>Orchestrator Offline</p>
-                <p style={{ fontSize: '11px', color: '#94a3b8' }}>
-                  Please verify your settings and check that your Monkeys backend orchestrator is running.
-                </p>
-              </div>
-            ) : jobs.length === 0 ? (
-              <div className="empty-state">
-                <HelpCircle size={32} />
-                <p style={{ fontSize: '13px', fontWeight: 600 }}>No Jobs Found</p>
-                <p style={{ fontSize: '11px', color: '#94a3b8' }}>
-                  Go to a tweet page on x.com and click the "Monkeys" button to trigger a screenshot job.
+                <MessageSquare size={32} />
+                <p style={{ fontSize: 13, fontWeight: 600 }}>No Mentions Yet</p>
+                <p style={{ fontSize: 11, color: '#94a3b8' }}>
+                  Keep a tab open on x.com/notifications. When someone tags @{settings?.xUsername}, it will appear here.
                 </p>
               </div>
             ) : (
               <div className="jobs-list">
-                {jobs.map((job) => (
-                  <div className="job-card" key={job.id}>
+                {mentions.map((m, i) => {
+                  const job = automation?.jobs.find(item => item.tweetId === m.tweetId && item.account === settings?.xUsername);
+                  return (
+                  <div className="job-card" key={i}>
                     <div className="job-header">
-                      <span className="job-type-badge">
-                        {job.type === 'mention_reply' ? 'Reply' : 'Curated'}
-                      </span>
-                      <span className={`job-status-pill ${job.status}`}>
-                        {job.status}
-                      </span>
+                      <span className="job-type-badge">MENTION</span>
+                      <span className="job-time">{new Date(m.detectedAt).toLocaleTimeString()}</span>
                     </div>
-
                     <div className="job-details">
-                      <a 
-                        href={`https://x.com/i/status/${job.sourceTweetId}`} 
-                        target="_blank" 
+                      <a
+                        href={`https://x.com/i/status/${m.tweetId}`}
+                        target="_blank"
                         rel="noreferrer"
                         className="tweet-link"
                       >
-                        <span>Tweet ID: ...{job.sourceTweetId.slice(-6)}</span>
+                        Tweet ...{m.tweetId.slice(-6)}
                         <ExternalLink size={10} />
                       </a>
-                      <span className="job-time">
-                        {new Date(job.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                      </span>
                     </div>
-
-                    {job.status === 'pending' && (
-                      <div className="job-actions">
-                        <button 
-                          className="action-btn-sm"
-                          onClick={() => handleApprove(job.id)}
-                        >
-                          Approve & Post
-                        </button>
-                      </div>
-                    )}
+                    {job && <div className="toggle-desc">{job.stage.replace(/_/g, ' ')}{job.error ? `: ${job.error}` : ''}</div>}
                   </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </>
-        ) : (
-          settings && (
-            <form onSubmit={handleSave} style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-              <div className="form-group">
-                <label className="form-label">Orchestrator URL</label>
-                <input 
-                  type="url" 
-                  className="form-input" 
-                  value={settings.orchestratorUrl}
-                  onChange={(e) => updateSettingField('orchestratorUrl', e.target.value)}
-                  placeholder="http://localhost:3000"
-                  required
+        ) : settings ? (
+          <form onSubmit={handleSave} style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+            <div className="form-group">
+              <label className="form-label" htmlFor="x-username">X username</label>
+              <input
+                id="x-username"
+                className="form-input"
+                value={settings.xUsername}
+                onChange={e => setSettings({ ...settings, xUsername: e.target.value })}
+                placeholder="@monkeys_com_co"
+                required
+                autoCapitalize="none"
+                spellCheck={false}
+              />
+            </div>
+            <div className="form-group">
+              <label className="form-label" htmlFor="studio-url">Studio URL</label>
+              <input
+                id="studio-url"
+                type="url"
+                className="form-input"
+                value={settings.studioUrl}
+                onChange={e => setSettings({ ...settings, studioUrl: e.target.value })}
+                placeholder="https://incredible-eclair-ada155.netlify.app"
+                required
+              />
+              <span className="toggle-desc">Website base URL. Screenshot theme: Midnight.</span>
+            </div>
+            <div className="form-group">
+              <label className="form-label">Orchestrator URL</label>
+              <input
+                type="url"
+                className="form-input"
+                value={settings.orchestratorUrl}
+                onChange={e => setSettings({ ...settings, orchestratorUrl: e.target.value })}
+                placeholder="http://localhost:3000"
+              />
+            </div>
+            <div className="form-group">
+              <label className="form-label">API Key</label>
+              <input
+                type="password"
+                className="form-input"
+                value={settings.apiKey}
+                onChange={e => setSettings({ ...settings, apiKey: e.target.value })}
+              />
+            </div>
+            <div className="toggle-group">
+              <div className="toggle-info">
+                <span className="toggle-title">Auto Reply on Mention</span>
+              </div>
+              <label className="switch">
+                <input
+                  type="checkbox"
+                  checked={settings.autoReply}
+                  onChange={e => setSettings({ ...settings, autoReply: e.target.checked })}
                 />
+                <span className="slider"></span>
+              </label>
+            </div>
+            <div className="toggle-group">
+              <div className="toggle-info">
+                <span className="toggle-title">Keep laptop awake</span>
+                <span className="toggle-desc">While monitoring. The display can turn off.</span>
               </div>
-
-              <div className="form-group">
-                <label className="form-label">API Key / JWT</label>
-                <input 
-                  type="password" 
-                  className="form-input" 
-                  value={settings.apiKey}
-                  onChange={(e) => updateSettingField('apiKey', e.target.value)}
-                  placeholder="Paste Monkeys Token"
-                />
-              </div>
-
-              <div className="toggle-group">
-                <div className="toggle-info">
-                  <span className="toggle-title">Auto Reply on Mention</span>
-                  <span className="toggle-desc">Automatically screenshot and reply</span>
-                </div>
-                <label className="switch">
-                  <input 
-                    type="checkbox" 
-                    checked={settings.autoReply}
-                    onChange={(e) => updateSettingField('autoReply', e.target.checked)}
-                  />
-                  <span className="slider"></span>
-                </label>
-              </div>
-
-              <div className="toggle-group">
-                <div className="toggle-info">
-                  <span className="toggle-title">Orbitor Curated Feed</span>
-                  <span className="toggle-desc">Auto-schedule top curated posts</span>
-                </div>
-                <label className="switch">
-                  <input 
-                    type="checkbox" 
-                    checked={settings.orbitorCuration}
-                    onChange={(e) => updateSettingField('orbitorCuration', e.target.checked)}
-                  />
-                  <span className="slider"></span>
-                </label>
-              </div>
-
-              <div className="form-group">
-                <label className="form-label">Screenshot styling theme</label>
-                <select 
-                  className="form-select"
-                  value={settings.selectedTheme}
-                  onChange={(e) => updateSettingField('selectedTheme', e.target.value)}
-                >
-                  <option value="material">Material (Default)</option>
-                  <option value="midnight">Midnight Dark</option>
-                  <option value="aurora">Aurora Neon</option>
-                  <option value="slate">Slate Modern</option>
-                </select>
-              </div>
-
-              <button className="submit-btn" type="submit" disabled={saving}>
-                {saving ? (
-                  <>
-                    <RefreshCw className="spinning" size={14} />
-                    <span>Saving...</span>
-                  </>
-                ) : (
-                  <>
-                    <Save size={14} />
-                    <span>Save Configuration</span>
-                  </>
-                )}
-              </button>
-
-              {message && (
-                <div className={`toast ${message.type}`}>
-                  {message.type === 'success' ? <CheckCircle2 size={14} /> : <AlertCircle size={14} />}
-                  <span>{message.text}</span>
-                </div>
+              <label className="switch">
+                <input type="checkbox" aria-label="Keep laptop awake" checked={settings.keepAwake}
+                  onChange={e => setSettings({ ...settings, keepAwake: e.target.checked })} />
+                <span className="slider"></span>
+              </label>
+            </div>
+            <button className="submit-btn" type="submit" disabled={saving}>
+              {saving ? (
+                <><RefreshCw className="spinning" size={14} /><span>Saving...</span></>
+              ) : (
+                <><Save size={14} /><span>Save Settings</span></>
               )}
-            </form>
-          )
-        )}
+            </button>
+            {message && (
+              <div className={`toast ${message.type}`}>
+                {message.type === 'success' ? <CheckCircle2 size={14} /> : <AlertCircle size={14} />}
+                <span>{message.text}</span>
+              </div>
+            )}
+          </form>
+        ) : null}
       </main>
 
-      {/* Footer */}
       <footer className="footer">
-        <span>v1.0.0</span>
-        <span>Monkeys X Automation</span>
+        <span>v1.0.2 · background export</span>
+        <span>Queue & recovery</span>
       </footer>
     </div>
   );

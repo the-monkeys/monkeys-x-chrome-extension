@@ -1,20 +1,26 @@
 {
   "manifest_version": 3,
+  "minimum_chrome_version": "102",
   "name": "Monkeys X Automation",
-  "version": "1.0.0",
+  "version": "1.0.2",
+  "version_name": "1.0.2 background export",
   "description": "Automate X interactions and screenshots with Monkeys Studio",
   "permissions": [
     "storage",
     "alarms",
-    "notifications"
+    "notifications",
+    "scripting",
+    "power"
   ],
   "host_permissions": [
     "https://x.com/*",
     "https://twitter.com/*",
     "https://monkeys.com.co/*",
+    "https://incredible-eclair-ada155.netlify.app/*",
     "https://monkeys.support/*",
     "http://localhost/*"
   ],
+  "optional_host_permissions": ["https://*/*", "http://*/*"],
   "background": {
     "service_worker": "background.js",
     "type": "module"
@@ -26,12 +32,23 @@
         "https://twitter.com/*"
       ],
       "js": [
-        "content.js"
+        "content.js",
+        "x-reply-automator.js"
       ],
       "css": [
         "content.css"
       ],
       "run_at": "document_end"
+    },
+    {
+      "matches": [
+        "https://x.com/*",
+        "https://twitter.com/*"
+      ],
+      "js": [
+        "notifications-watcher.js"
+      ],
+      "run_at": "document_idle"
     }
   ],
   "action": {

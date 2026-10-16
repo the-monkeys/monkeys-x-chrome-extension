@@ -342,6 +342,23 @@ body {
 }
 
 /* Settings Forms */
+.automation-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 12px;
+  margin-bottom: 16px;
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  background: var(--bg-card);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.automation-panel .dashboard-actions { margin-bottom: 0; gap: 8px; }
+.automation-warning { color: var(--color-warning); overflow-wrap: anywhere; }
+.skip-request { align-self: flex-start; font-size: 11px; }
+button:disabled { opacity: .5; cursor: default; }
+
 .form-group {
   display: flex;
   flex-direction: column;
@@ -504,6 +521,10 @@ input:checked + .slider:before {
 }
 .toast.success { background: rgba(16, 185, 129, 0.15); color: var(--color-success); border: 1px solid rgba(16, 185, 129, 0.2); }
 .toast.error { background: rgba(239, 68, 68, 0.15); color: var(--color-error); border: 1px solid rgba(239, 68, 68, 0.2); }
+
+.diagnostics-panel { margin: 12px 0; padding: 10px; border: 1px solid var(--border-light); border-radius: 8px; font-size: 11px; }
+.diagnostics-panel summary { cursor: pointer; font-weight: 600; }
+.diagnostics-panel > span { display: block; margin: 6px 0; overflow-wrap: anywhere; }
 
 /* Footer */
 .footer {

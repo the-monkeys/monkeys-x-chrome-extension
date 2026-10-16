@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Background Studio export regression</title>
+<h1>Background Studio export regression</h1>
+<p>Runs Studio's deployed html-to-image renderer with native animation frames deliberately held.</p>
+<button id="run">Test background export</button>
+<pre id="status">Ready</pre>
+<div id="card" style="box-sizing:border-box;width:540px;height:675px;padding:36px;background:linear-gradient(145deg,#0a1628,#1b287a,#007f8b);font:24px Arial;color:white">
+  <strong>monkeys.com.co.</strong>
+  <div style="margin-top:180px;background:white;color:#101820;padding:24px;border-radius:20px">Play +<br>@_play_plus<br><br>Hey @monkeys_com_co screenshot this</div>
+</div>
+<img id="preview" alt="Rendered PNG" width="216">
+<script>
+  let nativeFramesHeld = 0, fallbackObserved = false, complete = false;
+  window.requestAnimationFrame = () => ++nativeFramesHeld;
+  window.cancelAnimationFrame = () => {};
+  const renderer = {};
+  window.webpackChunk_N_E = { push: bundle => bundle[1][19156]({}, renderer, { d: (target, definitions) => {
+    for (const [name, getter] of Object.entries(definitions)) Object.defineProperty(target, name, { get: getter });
+  } }) };
+  window.addEventListener('message', async event => {
+    if (event.source !== window || event.data?.token !== 'background-attempt') return;
+    if (event.data.type === 'MONKEYS_EXPORT_PROGRESS' && event.data.event === 'frame_fallback') fallbackObserved = true;
+    if (event.data.type === 'MONKEYS_EXPORT_FAILED') document.getElementById('status').textContent = 'FAIL: ' + event.data.error;
+    if (complete || event.data.type !== 'MONKEYS_INTERCEPTED_BLOB') return;
+    complete = true;
+    const image = document.getElementById('preview'); image.src = event.data.dataUrl; await image.decode();
+    document.getElementById('status').textContent = JSON.stringify({ result: nativeFramesHeld > 0 && fallbackObserved &&
+      image.naturalWidth === 1080 && image.naturalHeight === 1350 ? 'PASS' : 'FAIL', nativeFramesHeld,
+      fallbackObserved, width: image.naturalWidth, height: image.naturalHeight, characters: event.data.dataUrl.length }, null, 2);
+    document.documentElement.removeAttribute('data-monkeys-export-until');
+    document.documentElement.removeAttribute('data-monkeys-export-token');
+  });
+</script>
+<script src="/public/injected-interceptor.js"></script>
+<script src="https://incredible-eclair-ada155.netlify.app/_next/static/chunks/19156.b75e888b2d31c19c.js"></script>
+<script>
+  document.getElementById('run').onclick = async () => {
+    document.getElementById('status').textContent = 'Rendering…';
+    document.documentElement.setAttribute('data-monkeys-export-until', String(Date.now() + 60000));
+    document.documentElement.setAttribute('data-monkeys-export-token', 'background-attempt');
+    try {
+      const blob = await renderer.toBlob(document.getElementById('card'), { pixelRatio: 2 });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a'); anchor.href = url; anchor.download = 'background-test.png';
+      document.body.append(anchor); anchor.click(); anchor.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (error) { document.getElementById('status').textContent = 'FAIL: ' + error.message; }
+  };
+</script>
+</html>
